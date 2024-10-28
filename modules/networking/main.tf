@@ -1,58 +1,72 @@
-provider "aws" {
-  region = var.region
+module "vpc" {
+  source = "terraform-aws-modules/vpc/aws"
+
+  name = "${var.vpc_name}-vpc"
+  cidr = var.vpc_cidr
+
+  azs             = ["us-east-1a","us-east-1b"]
+  private_subnets = [var.private_subnet_cidr1,var.private_subnet_cidr2]
+  public_subnets  = [var.public_subnet_cidr1,var.public_subnet_cidr2]
+
+  enable_nat_gateway = false
+  enable_vpn_gateway = false
+  single_nat_gateway = true
 }
 
-resource "aws_vpc" "main" {
-  cidr_block = var.vpc_cidr
+module "node-sg" {
+  source = "terraform-aws-modules/security-group/aws"
 
-  tags = {
-    Name = "${var.vpc_name}-vpc"
+  name        = "node-sg"
+  description = "Allow nodes to communicate with each other"
+  vpc_id      = module.vpc.vpc_id
+ingress_with_self = [
+  {
+    from_port   = 0
+    to_port     = 0
+    protocol    = -1
+    description = "Allow nodes to communicate with each other"
+    self        = true
   }
-}
+]
 
-resource "aws_subnet" "public" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = var.public_subnet_cidr
-
-  map_public_ip_on_launch = true
-
-  tags = {
-    Name = "${var.vpc_name}-public-subnet"
+egress_with_cidr_blocks = [
+  {
+    from_port   = 0
+    to_port     = 0
+    protocol    = -1
+    description = "Allow all outbound traffic"
+    cidr_blocks = "0.0.0.0/0"
   }
+]
 }
 
-resource "aws_internet_gateway" "igw" {
-  vpc_id = aws_vpc.main.id
+module "eks-additional-sg" {
+  source = "terraform-aws-modules/security-group/aws"
 
-  tags = {
-    Name = "${var.vpc_name}-igw"
-  }
+  name        = "eks-additional-sg"
+  vpc_id      = module.vpc.vpc_id
+  ingress_with_source_security_group_id = [
+    {
+      description     = "Allow pods running extension API servers on port 443 to receive communication from cluster control plane"
+      from_port       = 443
+      to_port         = 443
+      protocol        = "tcp"
+      source_security_group_id = module.node-sg.security_group_id
+    },{
+  description              = "Allow worker Kubelets and pods to receive communication from the cluster control plane"
+  from_port                = 1025
+  to_port                  = 65535
+  protocol                 = "tcp"
+  source_security_group_id = module.node-sg.security_group_id 
 }
-
-resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.main.id
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.igw.id
-  }
-
-  tags = {
-    Name = "${var.vpc_name}-public-route-table"
-  }
+]
+  egress_with_cidr_blocks = [
+    {
+      from_port   = 0
+      to_port     = 0
+      protocol    = -1
+      description = "Allow all outbound traffic"
+      cidr_blocks = "0.0.0.0/0"
+    }
+  ]
 }
-
-resource "aws_route_table_association" "public" {
-  subnet_id      = aws_subnet.public.id
-  route_table_id = aws_route_table.public.id
-}
-
-resource "aws_subnet" "private" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = var.private_subnet_cidr
-
-  tags = {
-    Name = "${var.vpc_name}-private-subnet"
-  }
-}
-
